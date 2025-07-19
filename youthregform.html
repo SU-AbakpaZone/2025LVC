@@ -9,9 +9,11 @@
       font-family: Arial, sans-serif;
       padding: 20px;
       background-color: #0a4220;
+      color: white;
     }
     h1, h2 {
       text-align: center;
+      color: #ddcfa0;
     }
     .logo {
       text-align: center;
@@ -27,6 +29,7 @@
       background-color: #ddcfa0;
       border-radius: 8px;
       box-shadow: 0 0 10px rgba(0,0,0,0.1);
+      color: #333;
     }
     input, select, button, textarea {
       width: 95%;
@@ -49,6 +52,8 @@
       width: 100%;
       border-collapse: collapse;
       margin-top: 10px;
+      background-color: white;
+      color: #333;
     }
     table, th, td {
       border: 1px solid #ccc;
@@ -64,6 +69,10 @@
     .admin-section {
       display: none;
     }
+    #confirmation button {
+      width: 100%;
+      margin-top: 15px;
+    }
   </style>
 
   <!-- Firebase SDKs -->
@@ -77,8 +86,12 @@
     </div>
     <h2><b>Scripture Union Nigeria, Abakpa Zone.</b> <br>2025 Children, Youth & Students Long Vacation Camp.<br>Youth Registration Portal</h2>
     <input type="text" name="name" placeholder="Full Name" required />
-    <input type="text" name="age" placeholder="Age" required />
-    <input type="text" name="gender" placeholder="Gender" required />
+    <input type="number" name="age" placeholder="Age" required min="1" max="30" />
+    <select name="gender" required>
+      <option value="">Select Gender</option>
+      <option value="Male">Male</option>
+      <option value="Female">Female</option>
+    </select>
     <input type="text" name="class_fellowship" placeholder="Fellowship Group" required />
     <input type="text" name="church" placeholder="Church" required />
     <input type="text" name="school" placeholder="School" required />
@@ -89,10 +102,18 @@
       <option value="SCHOOL LEAVER">School Leaver</option>
       <option value="STUDENT">Student</option>
     </select>
-    <input type="tel" name="phone" placeholder="Phone Number" required />
-    <input type="tel" name="parent_contact" placeholder="Parent/Guardian Contact" required />
-    <input type="text" name="are_you_su_member" placeholder="Are you SU member" required />
-    <input type="text" name="is_it_your_first_time_in_su_camp" placeholder="Is it your first time in SU camp?" required />
+    <input type="tel" name="phone" placeholder="Phone Number" required pattern="[0-9]{11}" />
+    <input type="tel" name="parent_contact" placeholder="Parent/Guardian Contact" required pattern="[0-9]{11}" />
+    <select name="are_you_su_member" required>
+      <option value="">Are you SU member?</option>
+      <option value="Yes">Yes</option>
+      <option value="No">No</option>
+    </select>
+    <select name="is_it_your_first_time_in_su_camp" required>
+      <option value="">Is it your first time in SU camp?</option>
+      <option value="Yes">Yes</option>
+      <option value="No">No</option>
+    </select>
     <button type="submit">Submit</button>
   </form>
 
@@ -100,7 +121,7 @@
 
   <div id="adminLogin">
     <h2>Admin Login</h2>
-    <form onsubmit="checkAdmin(event)">
+    <form id="adminForm">
       <input type="password" id="adminPassword" placeholder="Enter admin password" required />
       <button type="submit">Login</button>
     </form>
@@ -139,12 +160,13 @@
       apiKey: "AIzaSyAFBrL5Mshf-YWUOSF1Qc5029i-ZVTVrw8",
       authDomain: "su-second-batch-e15ee.firebaseapp.com",
       projectId: "su-second-batch-e15ee",
-      storageBucket: "su-second-batch-e15ee.firebasestorage.app",
+      storageBucket: "su-second-batch-e15ee.appspot.com",
       messagingSenderId: "1050830920257",
       appId: "1:1050830920257:web:1e23474ef8ae80cdc644c0",
       measurementId: "G-LZYXV8MEQP"
     };
 
+    // Initialize Firebase
     const app = firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
 
@@ -152,10 +174,16 @@
     const confirmation = document.getElementById('confirmation');
     const tableBody = document.getElementById('tableBody');
     const adminPanel = document.getElementById('adminPanel');
+    const adminForm = document.getElementById('adminForm');
+
+    // Initialize serial number if not exists
+    if (!localStorage.getItem('serialNumber')) {
+      localStorage.setItem('serialNumber', '0');
+    }
 
     function getSerialNumber() {
-      let serial = parseInt(localStorage.getItem('serialNumber') || '0') + 1;
-      localStorage.setItem('serialNumber', serial);
+      let serial = parseInt(localStorage.getItem('serialNumber')) + 1;
+      localStorage.setItem('serialNumber', serial.toString());
       return serial;
     }
 
@@ -164,6 +192,7 @@
       const formData = new FormData(form);
       const data = Object.fromEntries(formData.entries());
       data.code = `SU${getSerialNumber().toString().padStart(4, '0')}`;
+      data.timestamp = firebase.firestore.FieldValue.serverTimestamp();
 
       db.collection("applications").add(data)
         .then(() => {
@@ -171,7 +200,8 @@
           form.reset();
         })
         .catch(err => {
-          alert("Submission failed: " + err.message);
+          console.error("Submission failed: ", err);
+          alert("Submission failed. Please try again.");
         });
     });
 
@@ -181,7 +211,7 @@
         <h2>Dear ${data.name} (${data.code}),</h2>
         <p>Thank you for your application to be a part of this year Children, Youth and Student Long Vacation Camp. We believe it will bless you.</p>
         <p>Come with 700 naira to purchase camp materials such as Bible study outline and Magazine.</p>
-        <button onclick='downloadResponse(${JSON.stringify(data)})'>Download Confirmation PDF</button>
+        <button onclick="downloadResponse(${JSON.stringify(data).replace(/"/g, '&quot;')})">Download Confirmation</button>
       `;
     }
 
@@ -193,13 +223,19 @@
       a.href = url;
       a.download = `${data.code}_confirmation.txt`;
       a.click();
+      URL.revokeObjectURL(url);
     }
 
     function loadApplications() {
-      db.collection("applications").get().then(snapshot => {
-        const data = snapshot.docs.map(doc => doc.data());
-        renderTable(data);
-      });
+      db.collection("applications").orderBy("timestamp", "desc").get()
+        .then(snapshot => {
+          const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          renderTable(data);
+        })
+        .catch(err => {
+          console.error("Error loading applications: ", err);
+          alert("Error loading applications. Please try again.");
+        });
     }
 
     function renderTable(data) {
@@ -230,35 +266,48 @@
         let csv = 'Code,Name,Age,Gender,Class Fellowship,Church,School,Class,Youth Category,Phone,Parent Contact,SU Member,First Time\n';
         snapshot.docs.forEach(doc => {
           const app = doc.data();
-          csv += `${app.code},${app.name},${app.age},${app.gender},${app.class_fellowship},${app.church},${app.school},${app.class},${app.youth_category},${app.phone},${app.parent_contact},${app.are_you_su_member},${app.is_it_your_first_time_in_su_camp}\n`;
+          csv += `"${app.code}","${app.name}",${app.age},"${app.gender}","${app.class_fellowship}","${app.church}","${app.school}","${app.class}","${app.youth_category}","${app.phone}","${app.parent_contact}","${app.are_you_su_member}","${app.is_it_your_first_time_in_su_camp}"\n`;
         });
-        const blob = new Blob([csv], { type: 'text/csv' });
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'applications.csv';
+        a.download = 'su_camp_applications.csv';
         a.click();
+        URL.revokeObjectURL(url);
+      }).catch(err => {
+        console.error("Error downloading CSV: ", err);
+        alert("Error generating CSV file. Please try again.");
       });
     }
 
     function resetSerial() {
-      if (confirm('Are you sure you want to reset the serial number?')) {
-        localStorage.removeItem('serialNumber');
-        alert('Serial number reset.');
+      if (confirm('Are you sure you want to reset the serial number? This will affect new registrations.')) {
+        localStorage.setItem('serialNumber', '0');
+        alert('Serial number has been reset to 0.');
       }
     }
 
     document.getElementById('searchInput').addEventListener('input', e => {
-      const filter = e.target.value.toLowerCase();
-      db.collection("applications").get().then(snapshot => {
-        const filtered = snapshot.docs
-          .map(doc => doc.data())
-          .filter(app => app.name.toLowerCase().includes(filter));
-        renderTable(filtered);
-      });
+      const filter = e.target.value.trim().toLowerCase();
+      if (filter.length === 0) {
+        loadApplications();
+        return;
+      }
+      
+      db.collection("applications").get()
+        .then(snapshot => {
+          const filtered = snapshot.docs
+            .map(doc => doc.data())
+            .filter(app => app.name.toLowerCase().includes(filter));
+          renderTable(filtered);
+        })
+        .catch(err => {
+          console.error("Search error: ", err);
+        });
     });
 
-    function checkAdmin(e) {
+    adminForm.addEventListener('submit', function(e) {
       e.preventDefault();
       const password = document.getElementById('adminPassword').value;
       if (password === 'Letmein123@') {
@@ -268,7 +317,7 @@
       } else {
         alert('Incorrect password');
       }
-    }
+    });
   </script>
 </body>
 </html>
