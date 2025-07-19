@@ -43,6 +43,11 @@
       color: white;
       cursor: pointer;
       width: 20%;
+      transition: all 0.3s;
+    }
+    button:disabled {
+      background-color: #666;
+      cursor: not-allowed;
     }
     #resetBtn {
       background-color: #dc3545;
@@ -73,6 +78,22 @@
       width: 100%;
       margin-top: 15px;
     }
+    .loading {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 3px solid rgba(255,255,255,.3);
+      border-radius: 50%;
+      border-top-color: #fff;
+      animation: spin 1s ease-in-out infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .error-message {
+      color: #dc3545;
+      margin-top: 5px;
+    }
   </style>
 
   <!-- Firebase SDKs -->
@@ -102,8 +123,8 @@
       <option value="SCHOOL LEAVER">School Leaver</option>
       <option value="STUDENT">Student</option>
     </select>
-    <input type="tel" name="phone" placeholder="Phone Number" required pattern="[0-9]{11}" />
-    <input type="tel" name="parent_contact" placeholder="Parent/Guardian Contact" required pattern="[0-9]{11}" />
+    <input type="tel" name="phone" placeholder="Phone Number (11 digits)" required pattern="[0-9]{11}" />
+    <input type="tel" name="parent_contact" placeholder="Parent/Guardian Contact (11 digits)" required pattern="[0-9]{11}" />
     <select name="are_you_su_member" required>
       <option value="">Are you SU member?</option>
       <option value="Yes">Yes</option>
@@ -114,7 +135,8 @@
       <option value="Yes">Yes</option>
       <option value="No">No</option>
     </select>
-    <button type="submit">Submit</button>
+    <button type="submit" id="submitBtn">Submit</button>
+    <div id="formError" class="error-message"></div>
   </form>
 
   <div id="confirmation" style="display:none;"></div>
@@ -123,7 +145,8 @@
     <h2>Admin Login</h2>
     <form id="adminForm">
       <input type="password" id="adminPassword" placeholder="Enter admin password" required />
-      <button type="submit">Login</button>
+      <button type="submit" id="loginBtn">Login</button>
+      <div id="loginError" class="error-message"></div>
     </form>
   </div>
 
@@ -150,8 +173,9 @@
       </thead>
       <tbody id="tableBody"></tbody>
     </table>
-    <button onclick="downloadCSV()">Download CSV</button>
+    <button onclick="downloadCSV()" id="downloadBtn">Download CSV</button>
     <button id="resetBtn" onclick="resetSerial()">Reset Serial Number</button>
+    <div id="adminError" class="error-message"></div>
   </div>
 
   <script>
@@ -170,11 +194,21 @@
     const app = firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
 
+    // Enable debug logging
+    firebase.firestore.setLogLevel('debug');
+
+    // DOM elements
     const form = document.getElementById('campForm');
     const confirmation = document.getElementById('confirmation');
     const tableBody = document.getElementById('tableBody');
     const adminPanel = document.getElementById('adminPanel');
     const adminForm = document.getElementById('adminForm');
+    const submitBtn = document.getElementById('submitBtn');
+    const loginBtn = document.getElementById('loginBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const formError = document.getElementById('formError');
+    const loginError = document.getElementById('loginError');
+    const adminError = document.getElementById('adminError');
 
     // Initialize serial number if not exists
     if (!localStorage.getItem('serialNumber')) {
@@ -187,22 +221,39 @@
       return serial;
     }
 
-    form.addEventListener('submit', e => {
+    // Form submission handler
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const formData = new FormData(form);
-      const data = Object.fromEntries(formData.entries());
-      data.code = `SU${getSerialNumber().toString().padStart(4, '0')}`;
-      data.timestamp = firebase.firestore.FieldValue.serverTimestamp();
+      formError.textContent = '';
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<span class="loading"></span> Submitting...';
 
-      db.collection("applications").add(data)
-        .then(() => {
-          showConfirmation(data);
-          form.reset();
-        })
-        .catch(err => {
-          console.error("Submission failed: ", err);
-          alert("Submission failed. Please try again.");
-        });
+      try {
+        // Validate form
+        if (!form.checkValidity()) {
+          throw new Error('Please fill all required fields correctly');
+        }
+
+        const formData = new FormData(form);
+        const data = Object.fromEntries(formData.entries());
+        data.code = `SU${getSerialNumber().toString().padStart(4, '0')}`;
+        data.timestamp = firebase.firestore.FieldValue.serverTimestamp();
+
+        console.log('Submitting data:', data);
+        
+        // Add to Firestore
+        const docRef = await db.collection("applications").add(data);
+        console.log('Document written with ID: ', docRef.id);
+        
+        showConfirmation(data);
+        form.reset();
+      } catch (err) {
+        console.error("Submission failed: ", err);
+        formError.textContent = err.message || "Submission failed. Please try again.";
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Submit';
+      }
     });
 
     function showConfirmation(data) {
@@ -216,26 +267,68 @@
     }
 
     function downloadResponse(data) {
-      const content = `SU CAMP\n\nName: ${data.name}\nCode: ${data.code}\nAge: ${data.age}\nGender: ${data.gender}\nClass: ${data.class_fellowship}\nChurch: ${data.church}\nPhone: ${data.phone}\nParent Contact: ${data.parent_contact}\nYouth Category: ${data.youth_category}\nAre you SU Member: ${data.are_you_su_member}\nIs it your first time in SU Camp: ${data.is_it_your_first_time_in_su_camp}\n\nThank you for your application. Please come with 700 naira.`;
-      const blob = new Blob([content], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${data.code}_confirmation.txt`;
-      a.click();
-      URL.revokeObjectURL(url);
+      try {
+        const content = `SU CAMP\n\nName: ${data.name}\nCode: ${data.code}\nAge: ${data.age}\nGender: ${data.gender}\nClass: ${data.class_fellowship}\nChurch: ${data.church}\nPhone: ${data.phone}\nParent Contact: ${data.parent_contact}\nYouth Category: ${data.youth_category}\nAre you SU Member: ${data.are_you_su_member}\nIs it your first time in SU Camp: ${data.is_it_your_first_time_in_su_camp}\n\nThank you for your application. Please come with 700 naira.`;
+        const blob = new Blob([content], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${data.code}_confirmation.txt`;
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        console.error('Download failed:', err);
+        alert('Failed to generate confirmation. Please try again.');
+      }
     }
 
-    function loadApplications() {
-      db.collection("applications").orderBy("timestamp", "desc").get()
-        .then(snapshot => {
-          const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-          renderTable(data);
-        })
-        .catch(err => {
-          console.error("Error loading applications: ", err);
-          alert("Error loading applications. Please try again.");
-        });
+    // Admin login handler
+    adminForm.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      loginError.textContent = '';
+      loginBtn.disabled = true;
+      loginBtn.innerHTML = '<span class="loading"></span> Logging in...';
+
+      try {
+        const password = document.getElementById('adminPassword').value;
+        if (password !== 'Letmein123@') {
+          throw new Error('Incorrect password');
+        }
+
+        document.getElementById('adminLogin').style.display = 'none';
+        adminPanel.style.display = 'block';
+        
+        console.log('Loading applications...');
+        await loadApplications();
+        console.log('Applications loaded successfully');
+      } catch (err) {
+        console.error('Admin login error:', err);
+        loginError.textContent = err.message;
+      } finally {
+        loginBtn.disabled = false;
+        loginBtn.textContent = 'Login';
+      }
+    });
+
+    // Load applications data
+    async function loadApplications() {
+      adminError.textContent = '';
+      try {
+        const snapshot = await db.collection("applications").orderBy("timestamp", "desc").get();
+        
+        if (snapshot.empty) {
+          tableBody.innerHTML = '<tr><td colspan="13">No applications found</td></tr>';
+          return;
+        }
+
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        console.log('Applications loaded:', data.length);
+        renderTable(data);
+      } catch (err) {
+        console.error("Error loading applications: ", err);
+        adminError.textContent = "Error loading applications: " + err.message;
+        tableBody.innerHTML = '<tr><td colspan="13">Error loading data</td></tr>';
+      }
     }
 
     function renderTable(data) {
@@ -261,13 +354,20 @@
       });
     }
 
-    function downloadCSV() {
-      db.collection("applications").get().then(snapshot => {
+    // Download CSV function
+    async function downloadCSV() {
+      downloadBtn.disabled = true;
+      downloadBtn.innerHTML = '<span class="loading"></span> Preparing...';
+      
+      try {
+        const snapshot = await db.collection("applications").get();
         let csv = 'Code,Name,Age,Gender,Class Fellowship,Church,School,Class,Youth Category,Phone,Parent Contact,SU Member,First Time\n';
+        
         snapshot.docs.forEach(doc => {
           const app = doc.data();
           csv += `"${app.code}","${app.name}",${app.age},"${app.gender}","${app.class_fellowship}","${app.church}","${app.school}","${app.class}","${app.youth_category}","${app.phone}","${app.parent_contact}","${app.are_you_su_member}","${app.is_it_your_first_time_in_su_camp}"\n`;
         });
+        
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -275,10 +375,13 @@
         a.download = 'su_camp_applications.csv';
         a.click();
         URL.revokeObjectURL(url);
-      }).catch(err => {
+      } catch (err) {
         console.error("Error downloading CSV: ", err);
-        alert("Error generating CSV file. Please try again.");
-      });
+        adminError.textContent = "Error generating CSV file: " + err.message;
+      } finally {
+        downloadBtn.disabled = false;
+        downloadBtn.textContent = 'Download CSV';
+      }
     }
 
     function resetSerial() {
@@ -288,34 +391,25 @@
       }
     }
 
-    document.getElementById('searchInput').addEventListener('input', e => {
+    // Search functionality
+    document.getElementById('searchInput').addEventListener('input', async (e) => {
       const filter = e.target.value.trim().toLowerCase();
-      if (filter.length === 0) {
-        loadApplications();
-        return;
-      }
       
-      db.collection("applications").get()
-        .then(snapshot => {
-          const filtered = snapshot.docs
-            .map(doc => doc.data())
-            .filter(app => app.name.toLowerCase().includes(filter));
-          renderTable(filtered);
-        })
-        .catch(err => {
-          console.error("Search error: ", err);
-        });
-    });
-
-    adminForm.addEventListener('submit', function(e) {
-      e.preventDefault();
-      const password = document.getElementById('adminPassword').value;
-      if (password === 'Letmein123@') {
-        document.getElementById('adminLogin').style.display = 'none';
-        adminPanel.style.display = 'block';
-        loadApplications();
-      } else {
-        alert('Incorrect password');
+      try {
+        if (filter.length === 0) {
+          await loadApplications();
+          return;
+        }
+        
+        const snapshot = await db.collection("applications").get();
+        const filtered = snapshot.docs
+          .map(doc => doc.data())
+          .filter(app => app.name.toLowerCase().includes(filter));
+        
+        renderTable(filtered);
+      } catch (err) {
+        console.error("Search error: ", err);
+        adminError.textContent = "Search error: " + err.message;
       }
     });
   </script>
